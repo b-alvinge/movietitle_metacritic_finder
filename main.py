@@ -78,7 +78,7 @@ def get_metacritic_info(movie_title):
 
 
 
-title_script_df = pd.read_excel('title_script_output.xlsx')
+title_script_df = pd.read_hdf('title_script.h5', 'df')
 title_script_summary_genres_score_df = pd.DataFrame()
 for _, row in title_script_df.iterrows():
     movie_title = row['title']
@@ -93,4 +93,4 @@ for _, row in title_script_df.iterrows():
     # append the new row to the DataFrame
     title_script_summary_genres_score_df = title_script_summary_genres_score_df._append(new_row, ignore_index=True)
 
-title_script_summary_genres_score_df.to_excel("title_script_summary_genres_score_output3.xlsx", index=False)
+title_script_summary_genres_score_df.to_hdf("title_script_summary_genres_score.h5", key='df', mode='w')
