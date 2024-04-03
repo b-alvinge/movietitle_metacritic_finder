@@ -1,11 +1,41 @@
 import requests
 from bs4 import BeautifulSoup
 import pandas as pd
-import Levenshtein
+
 from selenium import webdriver
 import time
+import phonetics
+from fuzzywuzzy import fuzz
 
 from selenium.common import NoSuchElementException
+
+import inflect
+import re
+import os
+
+# Initialize the inflect engine for converting numbers to words
+p = inflect.engine()
+
+# Function to convert numbers in a string to words
+def numbers_to_words(input_str):
+    # Find all numbers in the string
+    numbers = re.findall(r'\b\d+\b', input_str)
+    for number in numbers:
+        # Convert each number to words
+        words = p.number_to_words(number)
+        # Replace the number with its word equivalent in the string
+        input_str = input_str.replace(number, words, 1)
+    return input_str
+
+# Function to normalize and get phonetic code
+def get_phonetic_code(input_str):
+    # Convert numbers to words in the string
+    words_str = numbers_to_words(input_str)
+    # Normalize the string (e.g., to lowercase)
+    normalized_str = words_str.lower()
+    # Get double metaphone codes
+    phonetic_code = phonetics.dmetaphone(normalized_str)
+    return phonetic_code
 
 
 def get_metacritic_info(movie_title):
@@ -47,10 +77,26 @@ def get_metacritic_info(movie_title):
     # If we found a link, proceed to fetch the movie's page
     if movie_link:
         movie_url = "https://www.metacritic.com" + movie_link['href']
-        if Levenshtein.ratio(movie_link['href'][7:-1], search_query) >= 1:
+        print(movie_link['href'][7:-1].replace('-', ' '))
+        code1 = get_phonetic_code(movie_link['href'][7:-1].replace('-', ' '))
+        print(movie_title)
+        code2 = get_phonetic_code(movie_title)
+        print(fuzz.ratio(code1, code2))
+        if fuzz.ratio(code1, code2) >= 100:
             response = requests.get(movie_url, headers=headers)
             if response.status_code == 200:
-                soup = BeautifulSoup(response.text, 'lxml')
+                driver = webdriver.Chrome(options=options)
+                driver.get(movie_url)
+
+                try:
+                    element = driver.find_element("xpath", "//span[text()='Read More']")
+                    driver.execute_script("arguments[0].click();", element)
+                    time.sleep(1)
+                except NoSuchElementException:
+                    print("Did not find the 'Read More' button.")
+                soup = BeautifulSoup(driver.page_source, 'html.parser')
+                driver.close()
+                #soup = BeautifulSoup(response.text, 'lxml')
 
 
                 score = soup.find('div',
@@ -78,19 +124,42 @@ def get_metacritic_info(movie_title):
 
 
 
-title_script_df = pd.read_hdf('title_script.h5', 'df')
-title_script_summary_genres_score_df = pd.DataFrame()
-for _, row in title_script_df.iterrows():
-    movie_title = row['title']
-    script = row['script']
-    meta_score, summary, genres, failure_comment = get_metacritic_info(movie_title)
-    print(movie_title, summary, genres, meta_score, failure_comment)
-    new_row = {'title': movie_title,
-               'script': script,
-               'meta_summary': summary,
-               'meta_genres': genres,
-               'meta_score': meta_score}
-    # append the new row to the DataFrame
-    title_script_summary_genres_score_df = title_script_summary_genres_score_df._append(new_row, ignore_index=True)
+title_df = pd.read_hdf('causal_review_df_new.h5')
 
-title_script_summary_genres_score_df.to_hdf("title_script_summary_genres_score.h5", key='df', mode='w')
+if not os.path.exists("title_summary_genres_score.h5"):
+    title_summary_genres_score_df = pd.DataFrame(columns=['title', 'meta_summary', 'meta_genres', 'meta_score'])
+    title_summary_genres_score_df.to_hdf("title_summary_genres_score.h5", mode='w', key='df')
+
+
+title_summary_genres_score_df = pd.read_hdf('title_summary_genres_score.h5')
+
+for title in title_df['movie_title'].explode().unique():
+    try:
+        if title not in title_summary_genres_score_df['title'].values:
+            movie_title = title
+            # Simulated function to get metadata (replace with your actual function)
+            meta_score, summary, genres, failure_comment = get_metacritic_info(movie_title)
+            print(movie_title, summary, genres, meta_score, failure_comment)
+
+            # Create a new row as a dictionary
+            new_row = {'title': movie_title,
+                       'meta_summary': summary,
+                       'meta_genres': genres,
+                       'meta_score': meta_score}
+
+            # Append the new row to the DataFrame
+            title_summary_genres_score_df = title_summary_genres_score_df._append(new_row, ignore_index=True)
+
+        else:
+            print(title, 'already in hdf.')
+
+        # Store the updated DataFrame back into the HDF5 file after each successful addition
+        title_summary_genres_score_df.to_hdf("title_summary_genres_score.h5", mode='a', key='df')
+
+    except Exception as e:
+        print(f"Error processing {title}: {e}")
+        # Optionally, break or continue based on the error handling logic you prefer
+        break
+
+    # It's a good practice to also save outside the loop, to catch any changes made during the last iteration
+title_summary_genres_score_df.to_hdf("title_summary_genres_score.h5", mode='w', key='df')
